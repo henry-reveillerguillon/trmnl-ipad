@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Écran TRMNL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TRMNL">
+<meta name="robots" content="noindex">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<style>
+  /* Plein écran façon e-ink : l'image TRMNL au centre, réglages en feuille par-dessus. */
+  :root {
+    --paper: #ffffff;
+    --ink: #111111;
+    --muted: #5d5f63;
+    --line: #d4d5d8;
+    --sheet: #f4f4f2;
+    --danger: #a3261d;
+    --font: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 17px;
+    -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; overflow: hidden;
+  }
+  body.mode-dark, body.mode-night { background: #000000; }
+
+  #screen { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: -webkit-flex; display: flex;
+    -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
+  #img { display: block; width: 100%; height: 100%; object-fit: contain;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .mode-dark #img { -webkit-filter: invert(1); filter: invert(1); }
+  .mode-night #img { -webkit-filter: invert(1) brightness(0.55); filter: invert(1) brightness(0.55); }
+
+  #status { position: fixed; left: 50%; bottom: 24px; bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    -webkit-transform: translateX(-50%); transform: translateX(-50%); max-width: 80%;
+    background: var(--ink); color: var(--paper); font-size: 15px; line-height: 1.35; padding: 8px 14px; border-radius: 8px; text-align: center; }
+  #status.is-error { background: var(--danger); color: #ffffff; }
+
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(17, 17, 17, 0.92); color: #ffffff;
+    display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-flex-wrap: wrap; flex-wrap: wrap;
+    padding: 12px 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  #bar-info { -webkit-flex: 1; flex: 1; min-width: 0; font-size: 15px; margin: 4px 16px 4px 0; font-variant-numeric: tabular-nums; }
+  #bar button { margin: 4px 0 4px 8px; }
+
+  button { font: inherit; font-size: 16px; font-weight: 600; border-radius: 8px; padding: 10px 16px; cursor: pointer;
+    border: 2px solid var(--ink); background: var(--ink); color: var(--paper); }
+  button.ghost { background: transparent; color: inherit; border-color: currentColor; }
+  button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #3d6fd6; outline-offset: 2px; }
+  #bar button { border-color: #ffffff; background: #ffffff; color: #111111; }
+  #bar button.ghost { background: transparent; color: #ffffff; }
+
+  #setup { position: fixed; top: 0; right: 0; bottom: 0; left: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--sheet); }
+  .sheet { max-width: 520px; margin: 0 auto; padding-top: 48px; padding-top: calc(48px + env(safe-area-inset-top, 0px));
+    padding-bottom: 48px; padding-left: 16px; padding-right: 16px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .mark { width: 56px; height: 40px; border: 4px solid var(--ink); border-radius: 8px; position: relative; margin-bottom: 20px; }
+  .mark:after { content: ""; position: absolute; left: 8px; right: 8px; top: 9px; height: 4px; background: var(--ink);
+    box-shadow: 0 9px 0 var(--ink); }
+  h1 { font-size: 30px; line-height: 1.15; margin: 0 0 10px; }
+  .lead { color: var(--muted); line-height: 1.45; margin: 0 0 28px; }
+  .field { margin-bottom: 20px; }
+  label { display: block; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; margin-bottom: 8px; }
+  input, select { display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 18px; color: var(--ink);
+    background: var(--paper); border: 2px solid var(--line); border-radius: 8px; padding: 12px; -webkit-appearance: none; appearance: none; }
+  input:focus, select:focus { border-color: var(--ink); outline: none; }
+  #key { -webkit-text-security: disc; font-family: ui-monospace, Menlo, monospace; }
+  .hint { font-size: 14px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
+  .hint a { color: var(--ink); }
+  details { margin: 4px 0 24px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 15px; }
+  details .field { margin-top: 14px; }
+  .actions { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; margin: 0 -4px; }
+  .actions button { margin: 4px; }
+  #form-error { color: var(--danger); font-weight: 600; margin: 0 0 16px; }
+  .forget { margin-top: 28px; background: none; border: 0; padding: 0; color: var(--danger); font-size: 15px; font-weight: 500; text-decoration: underline; }
+  .steps { margin: 36px 0 0; padding: 20px 0 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 15px; line-height: 1.5; }
+  .steps b { color: var(--ink); }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body class="mode-light">
+
+<div id="screen" hidden>
+  <img id="img" alt="Écran TRMNL">
+</div>
+<div id="status" hidden></div>
+
+<div id="bar" hidden>
+  <div id="bar-info"></div>
+  <button type="button" id="btn-refresh">Actualiser</button>
+  <button type="button" id="btn-settings" class="ghost">Réglages</button>
+</div>
+
+<form id="setup" hidden autocomplete="off">
+  <div class="sheet">
+    <div class="mark" aria-hidden="true"></div>
+    <h1>Écran TRMNL</h1>
+    <p class="lead">Cet iPad affiche l'écran de ton appareil TRMNL et le met à jour au même rythme. La clé reste enregistrée sur cet iPad et n'est envoyée qu'à TRMNL.</p>
+
+    <p id="form-error" hidden></p>
+
+    <div class="field">
+      <label for="key">Clé de l'appareil</label>
+      <input id="key" name="key" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Colle la clé ici">
+      <p class="hint">Sur trmnl.com : <a href="https://trmnl.com/devices/current/edit" target="_blank" rel="noopener">réglages de l'appareil</a>, champ API Key.</p>
+    </div>
+
+    <div class="field">
+      <label for="mode">Affichage</label>
+      <select id="mode" name="mode">
+        <option value="light">Clair, noir sur blanc</option>
+        <option value="dark">Sombre, blanc sur noir</option>
+        <option value="night">Nuit, sombre et atténué</option>
+      </select>
+    </div>
+
+    <details id="adv">
+      <summary>Serveur</summary>
+      <div class="field">
+        <label for="base">Adresse du serveur</label>
+        <input id="base" name="base" type="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://trmnl.com">
+        <p class="hint">À laisser vide, sauf si tu héberges ton propre serveur TRMNL.</p>
+      </div>
+    </details>
+
+    <div class="actions">
+      <button type="submit">Afficher l'écran</button>
+      <button type="button" id="btn-cancel" class="ghost" hidden>Retour à l'écran</button>
+    </div>
+    <button type="button" id="btn-forget" class="forget" hidden>Oublier la clé sur cet iPad</button>
+
+    <div class="steps">
+      <b>Pour un affichage permanent :</b> dans Safari, touche Partager puis « Sur l'écran d'accueil », et ouvre l'écran depuis cette icône. Dans Réglages, mets le verrouillage automatique sur Jamais et laisse l'iPad branché. Touche l'écran pour actualiser ou revenir ici.
+    </div>
+  </div>
+</form>
+
+<script>
+(function () {
+  var STORE = "trmnl-ipad";
+  var DEFAULT_BASE = "https://trmnl.com";
+  var RETRY = 60;
+  var state = { timer: null, barTimer: null, nextAt: 0, lastAt: 0, busy: false, wake: null };
+
+  function $(id) { return document.getElementById(id); }
+  function readCfg() {
+    try { return JSON.parse(window.localStorage.getItem(STORE)) || {}; } catch (e) { return {}; }
+  }
+  function writeCfg(cfg) {
+    try { window.localStorage.setItem(STORE, JSON.stringify(cfg)); return true; } catch (e) { return false; }
+  }
+  function hhmm(t) {
+    var d = new Date(t), h = d.getHours(), m = d.getMinutes();
+    return (h < 10 ? "0" : "") + h + "h" + (m < 10 ? "0" : "") + m;
+  }
+
+  function applyMode(mode) {
+    document.body.className = "mode-" + (mode || "light");
+  }
+
+  function showStatus(msg, isError) {
+    var el = $("status");
+    el.textContent = msg;
+    el.className = isError ? "is-error" : "";
+    el.hidden = false;
+  }
+  function hideStatus() { $("status").hidden = true; }
+
+  function schedule(seconds) {
+    clearTimeout(state.timer);
+    var s = parseInt(seconds, 10);
+    if (!(s > 0)) s = 300;
+    s = Math.max(60, Math.min(3600, s));
+    state.nextAt = Date.now() + s * 1000;
+    state.timer = setTimeout(fetchDisplay, s * 1000);
+  }
+
+  function fail(msg, retry) {
+    state.busy = false;
+    if (!$("setup").hidden) {
+      $("form-error").textContent = msg;
+      $("form-error").hidden = false;
+      return;
+    }
+    showStatus(msg, true);
+    if (retry) schedule(RETRY);
+  }
+
+  function fetchDisplay() {
+    clearTimeout(state.timer);
+    var cfg = readCfg();
+    if (!cfg.key) { openSetup(); return; }
+    if (state.busy) return;
+    state.busy = true;
+    var base = (cfg.base || DEFAULT_BASE).replace(/\/+$/, "");
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", base + "/api/display", true);
+    xhr.setRequestHeader("Access-Token", cfg.key);
+    xhr.timeout = 30000;
+    xhr.onload = function () {
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        return fail("Réponse illisible du serveur (HTTP " + xhr.status + "). Nouvel essai dans 1 min.", true);
+      }
+      if (data.status === 500 || xhr.status === 401 || xhr.status === 404) {
+        state.busy = false;
+        return openSetup("TRMNL ne reconnaît pas cette clé. Vérifie-la dans les réglages de ton appareil.");
+      }
+      if (xhr.status !== 200 || !data.image_url) {
+        return fail("TRMNL n'a pas renvoyé d'écran (" + (data.error || data.message || "HTTP " + xhr.status) + "). Nouvel essai dans 1 min.", true);
+      }
+      var pre = new Image();
+      pre.onload = function () {
+        state.busy = false;
+        $("img").src = data.image_url;
+        state.lastAt = Date.now();
+        hideStatus();
+        if (!$("setup").hidden) closeSetup();
+        schedule(data.refresh_rate);
+      };
+      pre.onerror = function () { fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true); };
+      pre.src = data.image_url;
+    };
+    xhr.onerror = function () { fail("Pas de connexion à TRMNL. Nouvel essai dans 1 min.", true); };
+    xhr.ontimeout = xhr.onerror;
+    xhr.send();
+  }
+
+  function keepAwake() {
+    if (!navigator.wakeLock || document.visibilityState !== "visible") return;
+    navigator.wakeLock.request("screen").then(function (lock) { state.wake = lock; })["catch"](function () {});
+  }
+
+  function openSetup(errorMsg) {
+    var cfg = readCfg();
+    clearTimeout(state.timer);
+    hideBar();
+    hideStatus();
+    $("key").value = cfg.key || "";
+    $("mode").value = cfg.mode || "light";
+    $("base").value = cfg.base || "";
+    $("adv").open = !!cfg.base;
+    $("btn-cancel").hidden = !cfg.key;
+    $("btn-forget").hidden = !cfg.key;
+    $("form-error").hidden = !errorMsg;
+    if (errorMsg) $("form-error").textContent = errorMsg;
+    $("screen").hidden = true;
+    $("setup").hidden = false;
+    applyMode("light");
+  }
+  function closeSetup() {
+    $("setup").hidden = true;
+    $("screen").hidden = false;
+    applyMode(readCfg().mode);
+  }
+
+  function showBar() {
+    var info = state.lastAt ? "Mis à jour à " + hhmm(state.lastAt) : "En attente du premier écran";
+    if (state.nextAt) {
+      var min = Math.max(0, Math.round((state.nextAt - Date.now()) / 60000));
+      info += " · suivant dans " + (min < 1 ? "moins d'1 min" : min + " min");
+    }
+    $("bar-info").textContent = info;
+    $("bar").hidden = false;
+    clearTimeout(state.barTimer);
+    state.barTimer = setTimeout(hideBar, 6000);
+  }
+  function hideBar() { $("bar").hidden = true; clearTimeout(state.barTimer); }
+
+  $("setup").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var key = $("key").value.replace(/\s+/g, "");
+    if (!key) { $("form-error").textContent = "Colle d'abord la clé de l'appareil."; $("form-error").hidden = false; return; }
+    var base = $("base").value.replace(/\s+/g, "");
+    var cfg = { key: key, mode: $("mode").value, base: base && base !== DEFAULT_BASE ? base : "" };
+    if (!writeCfg(cfg)) {
+      $("form-error").textContent = "Safari refuse d'enregistrer la clé. Quitte la navigation privée puis réessaie.";
+      $("form-error").hidden = false;
+      return;
+    }
+    $("form-error").hidden = true;
+    closeSetup();
+    showStatus("Connexion à TRMNL…", false);
+    fetchDisplay();
+  });
+  $("btn-cancel").addEventListener("click", function () { closeSetup(); fetchDisplay(); });
+  $("btn-forget").addEventListener("click", function () {
+    try { window.localStorage.removeItem(STORE); } catch (e) {}
+    $("img").removeAttribute("src");
+    state.lastAt = 0; state.nextAt = 0;
+    openSetup();
+  });
+  $("screen").addEventListener("click", function () { if ($("bar").hidden) showBar(); else hideBar(); });
+  $("btn-refresh").addEventListener("click", function () { hideBar(); showStatus("Actualisation…", false); fetchDisplay(); });
+  $("btn-settings").addEventListener("click", function () { openSetup(); });
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    keepAwake();
+    if ($("setup").hidden && state.nextAt && Date.now() >= state.nextAt) fetchDisplay();
+  });
+  // Les minuteries peuvent dormir quand l'iPad se met en veille : on rattrape le retard.
+  setInterval(function () {
+    if ($("setup").hidden && state.nextAt && Date.now() > state.nextAt + 15000) fetchDisplay();
+  }, 30000);
+
+  if (readCfg().key) {
+    closeSetup();
+    showStatus("Connexion à TRMNL…", false);
+    fetchDisplay();
+  } else {
+    openSetup();
+  }
+  keepAwake();
+})();
+</script>
+</body>
+</html>
