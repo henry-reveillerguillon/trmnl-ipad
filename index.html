@@ -80,6 +80,8 @@
   .actions { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; margin: 0 -4px; }
   .actions button { margin: 4px; }
   #form-error { color: var(--danger); font-weight: 600; margin: 0 0 16px; }
+  .paste { margin-top: 8px; }
+  .hint.ok { color: var(--ink); font-weight: 600; }
   .forget { margin-top: 28px; background: none; border: 0; padding: 0; color: var(--danger); font-size: 15px; font-weight: 500; text-decoration: underline; }
   .steps { margin: 36px 0 0; padding: 20px 0 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 15px; line-height: 1.5; }
   .steps b { color: var(--ink); }
@@ -130,6 +132,8 @@
       <div class="field">
         <label for="account">Clé de compte</label>
         <input id="account" name="account" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Colle la clé de compte ici">
+        <div class="actions paste"><button type="button" id="btn-paste" class="ghost">Coller la clé copiée</button></div>
+        <p id="account-state" class="hint ok" hidden></p>
         <p class="hint">Avec cette clé, « Actualiser » fait recharger tout de suite les horaires et la météo, puis réaffiche le même écran. Elle permet aussi de revenir à l'écran précédent de la playlist. Sans elle, « Actualiser » passe à l'écran suivant. À créer sur trmnl.com dans les <a href="https://trmnl.com/account" target="_blank" rel="noopener">réglages du compte</a>, avec seulement les droits Read et Content, et l'accès à l'appareil et à ses plugins.</p>
       </div>
     </details>
@@ -158,7 +162,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 5;
+  var VERSION = 6;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -536,6 +540,7 @@
     $("base").value = cfg.base || "";
     $("account").value = cfg.account || "";
     $("force").open = !!cfg.account;
+    accountState();
     $("adv").open = !!cfg.base;
     $("btn-cancel").hidden = !cfg.key;
     $("btn-forget").hidden = !cfg.key;
@@ -545,6 +550,14 @@
     $("setup").hidden = false;
     applyMode("light");
   }
+  // Le champ est masqué : on dit en clair si une clé est là, sans l'afficher.
+  function accountState() {
+    var v = $("account").value.replace(/\s+/g, "");
+    var el = $("account-state");
+    el.hidden = !v;
+    el.textContent = v ? "✓ Clé présente (" + v.length + " caractères). Touche « Afficher l'écran » pour l'enregistrer." : "";
+  }
+
   function closeSetup() {
     $("setup").hidden = true;
     $("screen").hidden = false;
@@ -584,6 +597,21 @@
     showStatus("Connexion à TRMNL…", false);
     fetchDisplay();
   });
+  $("account").addEventListener("input", accountState);
+  $("btn-paste").addEventListener("click", function () {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      $("account").focus();
+      flashForm("Touche le champ « Clé de compte », puis Coller.");
+      return;
+    }
+    navigator.clipboard.readText().then(function (t) {
+      t = (t || "").replace(/\s+/g, "");
+      if (!t) { flashForm("Le presse-papiers est vide : copie d'abord la clé."); return; }
+      $("account").value = t;
+      accountState();
+    })["catch"](function () { flashForm("Safari n'a pas donné accès au presse-papiers. Touche le champ, puis Coller."); });
+  });
+  function flashForm(msg) { $("form-error").textContent = msg; $("form-error").hidden = false; }
   $("btn-cancel").addEventListener("click", function () { closeSetup(); fetchDisplay(); });
   $("btn-forget").addEventListener("click", function () {
     try { window.localStorage.removeItem(STORE); } catch (e) {}
