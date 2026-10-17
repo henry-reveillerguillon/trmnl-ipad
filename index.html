@@ -149,7 +149,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 10;
+  var VERSION = 11;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -313,7 +313,8 @@
       showScreen(data, function () {
         var r = data.rendered_at ? Date.parse(data.rendered_at) : 0;
         if (r > 0) state.renderedAt = r;
-        flash("Écran à jour" + (state.renderedAt ? " (calculé à " + hhmm(state.renderedAt) + ")" : "") + ".");
+        flash(state.renderedAt ? "Image calculée par TRMNL à " + hhmm(state.renderedAt) + ". Les données sont rechargées toutes les 15 min."
+          : "Image rechargée. Les données sont rechargées par TRMNL toutes les 15 min.");
         schedule(data.refresh_rate);
       });
     };
