@@ -18,11 +18,11 @@ Touche l'écran pour voir l'heure de la dernière mise à jour, changer d'écran
 
 Touche l'écran pour afficher la barre :
 
-- **Actualiser** : TRMNL recharge les données de l'écran affiché (tous les widgets d'un écran combiné), le recalcule et le renvoie environ 30 secondes plus tard. L'écran reste le même. C'est la fonction spéciale « Refresh » du boîtier (`Special-Function: refresh`).
+- **Actualiser** : réaffiche l'écran en cours avec sa dernière image calculée (`GET /api/display/current`), sans changer d'écran. Les données sont rechargées automatiquement par TRMNL (toutes les 15 min).
 - **◀** : écran précédent (fonction « Rewind », `Special-Function: rewind`).
 - **▶** : écran suivant.
 
-Glisser le doigt vers la gauche ou la droite fait la même chose que ▶ et ◀. Seule la clé de l'appareil est nécessaire. La page se présente avec le firmware 1.5.9, le minimum requis par ces fonctions.
+Glisser le doigt vers la gauche ou la droite fait la même chose que ▶ et ◀. Seule la clé de l'appareil est nécessaire. La page se présente avec le firmware 1.5.9, le minimum requis par la fonction « Rewind ».
 
 ## Bon à savoir
 

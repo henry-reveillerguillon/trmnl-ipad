@@ -149,7 +149,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 9;
+  var VERSION = 10;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -158,7 +158,7 @@
   var STALE_MS = 20 * 60 * 1000;
   var CATCH_UP = 90;
   var MAX_CATCH_UPS = 3;
-  // Les fonctions spéciales (refresh, rewind) demandent un firmware 1.5.9 ou plus récent :
+  // La fonction spéciale rewind (◀) demande un firmware 1.5.9 ou plus récent :
   // la page se présente comme tel.
   var FW_VERSION = "1.5.9";
   var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "",
@@ -213,7 +213,7 @@
     if (retry) schedule(RETRY);
   }
 
-  // Appel à l'API des appareils, comme le boîtier TRMNL. special : "refresh", "rewind" ou rien.
+  // Appel à l'API des appareils, comme le boîtier TRMNL. special : "rewind" ou rien.
   function deviceCall(special, done) {
     var cfg = readCfg();
     var xhr = new XMLHttpRequest();
@@ -290,39 +290,36 @@
     });
   }
 
-  // « Actualiser » : comme le bouton du boîtier réglé sur Refresh. TRMNL recharge les
-  // données de l'écran affiché (tous les widgets d'un écran combiné), le recalcule et le
-  // renvoie à la connexion suivante, environ 30 s plus tard. La playlist n'avance pas.
+  // « Actualiser » : réaffiche l'écran en cours avec sa dernière image calculée
+  // (/api/display/current), sans jamais avancer la playlist. Les données, elles, sont
+  // rechargées automatiquement par TRMNL toutes les 15 min.
   function refreshScreen() {
-    if (!readCfg().key) { openSetup(); return; }
+    var cfg = readCfg();
+    if (!cfg.key) { openSetup(); return; }
     if (state.busy) return;
     clearTimeout(state.timer);
-    state.nextAt = 0;
     state.busy = true;
-    showStatus("Actualisation de cet écran… (environ 30 s)", false);
-    deviceCall("refresh", function (data) {
-      if (!acknowledged(data, "refresh")) {
-        // Fonction refusée : TRMNL a servi l'écran suivant comme une connexion normale.
-        // On revient en arrière pour rester sur le même écran.
-        return deviceCall("rewind", function (back) {
-          showScreen(back, function () {
-            flash("TRMNL n'a pas accepté l'actualisation forcée. L'écran reste le même ; il sera mis à jour au prochain cycle.", true);
-            schedule(back.refresh_rate);
-          });
-        });
+    showStatus("Actualisation…", false);
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", (cfg.base || DEFAULT_BASE).replace(/\/+$/, "") + "/api/display/current?t=" + Date.now(), true);
+    xhr.setRequestHeader("Access-Token", cfg.key);
+    xhr.timeout = 30000;
+    xhr.onload = function () {
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status !== 200 || !data || !data.image_url) {
+        return fail("TRMNL n'a pas renvoyé l'écran en cours. Nouvel essai dans 1 min.", true);
       }
-      var wait = parseInt(data.refresh_rate, 10);
-      if (!(wait > 0)) wait = 30;
-      wait = Math.max(15, Math.min(90, wait));
-      setTimeout(function () {
-        deviceCall(null, function (fresh) {
-          showScreen(fresh, function () {
-            flash("Écran actualisé" + (state.renderedAt ? " (calculé à " + hhmm(state.renderedAt) + ")" : "") + ".");
-            schedule(fresh.refresh_rate);
-          });
-        });
-      }, wait * 1000);
-    });
+      showScreen(data, function () {
+        var r = data.rendered_at ? Date.parse(data.rendered_at) : 0;
+        if (r > 0) state.renderedAt = r;
+        flash("Écran à jour" + (state.renderedAt ? " (calculé à " + hhmm(state.renderedAt) + ")" : "") + ".");
+        schedule(data.refresh_rate);
+      });
+    };
+    xhr.onerror = function () { fail("Pas de connexion à TRMNL. Nouvel essai dans 1 min.", true); };
+    xhr.ontimeout = xhr.onerror;
+    xhr.send();
   }
 
   // ◀ : écran précédent, comme la fonction Rewind du boîtier.
