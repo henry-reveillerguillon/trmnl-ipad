@@ -162,7 +162,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 7;
+  var VERSION = 8;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -174,8 +174,10 @@
   // Forçage : chaque recalcul compte dans le quota horaire du compte TRMNL, d'où l'écart minimal.
   var FORCE_GAP = 2 * 60 * 1000;
   var FORCE_MAX = 8;
-  var FORCE_STEP = 5000;
-  var FORCE_TRIES = 8;
+  var FORCE_STEP = 4000;
+  var FORCE_TRIES = 15;
+  var FORCE_STABLE = 2;
+  var FORCE_NOCHANGE = 4;
   // Bus, trains, météo et calendrier, si la clé ne peut pas lister les plugins du compte.
   var FORCE_FALLBACK = [503473, 503477, 503609, 503500];
   var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "", catchUps: 0, busy: false, wake: null,
@@ -339,8 +341,9 @@
     });
   }
 
-  // « Actualiser » avec une clé de compte : TRMNL recharge les données de chaque plugin
-  // puis recalcule ses écrans. On réaffiche ensuite l'écran en cours, sans avancer la playlist.
+  // « Actualiser » avec une clé de compte : TRMNL recharge les widgets de l'écran affiché
+  // (les 3 d'un écran combiné), on attend qu'il ait fini de le recalculer, puis on
+  // réaffiche ce même écran, sans avancer la playlist.
   function forceRefresh() {
     var cfg = readCfg();
     if (state.busy) return;
@@ -356,17 +359,47 @@
     cfg.forcedAt = Date.now();
     writeCfg(cfg);
     var started = Date.now();
-    showStatus("Rechargement des horaires et de la météo…", false);
+    var targetId = state.itemId;
+    var count = 0;
+    showStatus("Rechargement des widgets de l'écran…", false);
 
-    accountCall("GET", "/api/plugin_settings", function (status, res) {
-      var ids = [];
-      if (status === 200 && res && res.data) {
-        for (var i = 0; i < res.data.length; i++) ids.push(res.data[i].id);
+    // L'écran affiché : celui choisi avec ◀ ▶, sinon celui où en est TRMNL.
+    accountCall("GET", "/api/playlists/items", function (st, res) {
+      var items = st === 200 && res && res.data ? playlistItems(res.data) : [];
+      var idx = findItem(items, targetId);
+      if (idx < 0) return refreshAll();
+      var item = items[idx];
+      targetId = item.id;
+      if (item.mashup_id) {
+        accountCall("GET", "/api/mashups/" + item.mashup_id, function (s2, m) {
+          var ids = [], c = m && m.data && m.data.contents;
+          if (s2 === 200 && c) {
+            for (var k in c) {
+              var v = c[k] && typeof c[k] === "object" ? c[k].id : c[k];
+              if (c.hasOwnProperty(k) && v) ids.push(v);
+            }
+          }
+          startRefreshes(ids.length ? ids : FORCE_FALLBACK.slice());
+        });
+      } else {
+        startRefreshes(item.plugin_setting_id ? [item.plugin_setting_id] : FORCE_FALLBACK.slice());
       }
-      // Clé limitée à Content, ou liste illisible : on recharge les plugins de l'écran d'Orléans.
-      if (!ids.length) ids = FORCE_FALLBACK.slice();
-      ids = ids.slice(0, FORCE_MAX);
+    });
 
+    // Playlist illisible (clé sans accès à l'appareil) : on recharge les plugins du compte
+    // et on réaffichera l'écran où en est TRMNL.
+    function refreshAll() {
+      targetId = null;
+      accountCall("GET", "/api/plugin_settings", function (st, res) {
+        var ids = [];
+        if (st === 200 && res && res.data) {
+          for (var i = 0; i < res.data.length; i++) ids.push(res.data[i].id);
+        }
+        startRefreshes((ids.length ? ids : FORCE_FALLBACK.slice()).slice(0, FORCE_MAX));
+      });
+    }
+
+    function startRefreshes(ids) {
       var pending = ids.length, jobs = [], ok = 0, refused = 0, quota = 0;
       for (var j = 0; j < ids.length; j++) startOne(ids[j]);
 
@@ -398,13 +431,15 @@
           schedule(RETRY);
           return;
         }
+        count = ok;
+        showStatus(ok > 1 ? "Rechargement des " + ok + " widgets…" : "Rechargement des données…", false);
         pollJobs(jobs, 0);
       }
-    });
+    }
 
     // Les plugins qui vont chercher une URL répondent un job : on attend qu'ils aient fini.
     function pollJobs(jobs, round) {
-      if (!jobs.length || round >= 10) return waitScreen(0);
+      if (!jobs.length || round >= 10) return targetId ? waitScreen(0, 0, 0) : waitCurrent(0);
       var left = jobs.length, still = [];
       for (var k = 0; k < jobs.length; k++) (function (j) {
         accountCall("GET", "/api/plugin_settings/" + j.id + "/refreshes/" + j.job, function (st) {
@@ -415,24 +450,29 @@
       })(jobs[k]);
     }
 
-    // Puis on attend que TRMNL ait recalculé l'écran affiché sur l'iPad (celui choisi
-    // avec ◀ ▶, sinon celui où en est TRMNL) et on réaffiche ce même écran.
-    var targetId = state.itemId;
-    function waitScreen(tries) {
+    function done(r, fresh) {
+      var what = count > 1 ? count + " widgets rechargés" : "Données rechargées";
+      return fresh ? what + ". Écran recalculé à " + hhmm(r) + "."
+        : what + ", sans changement depuis le dernier calcul" + (r ? " (" + hhmm(r) + ")" : "") + ".";
+    }
+
+    // TRMNL recalcule un écran combiné une fois par widget rechargé : on attend que
+    // l'heure de calcul de l'écran soit récente puis ne bouge plus pendant FORCE_STABLE relevés.
+    function waitScreen(tries, lastR, stable) {
       showStatus("Recalcul de l'écran…", false);
       setTimeout(function () {
         accountCall("GET", "/api/playlists/items", function (st, res) {
           var items = st === 200 && res && res.data ? playlistItems(res.data) : [];
           var idx = findItem(items, targetId);
-          // Playlist illisible (clé sans accès à l'appareil) : écran en cours selon TRMNL.
           if (idx < 0) return waitCurrent(tries);
-          targetId = items[idx].id;
           var r = Date.parse(items[idx].rendered_at) || 0;
           var fresh = r >= started - 5000;
-          if (!fresh && tries < FORCE_TRIES) return waitScreen(tries + 1);
-          loadPreview(items[idx], idx, items.length, fresh
-            ? "Données rechargées. Écran recalculé à " + hhmm(r) + "."
-            : "Données rechargées. TRMNL n'a pas encore recalculé cet écran : il apparaîtra à la prochaine mise à jour.");
+          stable = fresh && r === lastR ? stable + 1 : 0;
+          var settled = stable >= FORCE_STABLE;
+          // Données inchangées : TRMNL ne recalcule rien, inutile d'attendre davantage.
+          var unchanged = !fresh && tries >= FORCE_NOCHANGE;
+          if (!settled && !unchanged && tries < FORCE_TRIES) return waitScreen(tries + 1, r, stable);
+          loadPreview(items[idx], idx, items.length, done(r, fresh));
         });
       }, FORCE_STEP);
     }
@@ -442,18 +482,13 @@
         deviceCall("/api/display/current", function (data) {
           var r = data.rendered_at ? Date.parse(data.rendered_at) : 0;
           var fresh = r >= started - 5000;
-          if (!fresh && tries < FORCE_TRIES) return waitScreen(tries + 1);
+          if (!fresh && tries < FORCE_NOCHANGE) return waitCurrent(tries + 1);
           showScreen(data, function () {
-            if (fresh) {
-              flash("Données rechargées. Écran recalculé à " + hhmm(r) + ".");
-              schedule(data.refresh_rate);
-            } else {
-              flash("Données rechargées. TRMNL n'a pas encore recalculé l'écran : il apparaîtra à la prochaine mise à jour.");
-              schedule(data.refresh_rate);
-            }
+            flash(done(r, fresh));
+            schedule(data.refresh_rate);
           });
         });
-      }, 0);
+      }, FORCE_STEP);
     }
   }
 

@@ -25,7 +25,7 @@ Les boutons ◀ et ▶ de la barre, ou un glissement du doigt sur l'écran (vers
 
 Sans autre réglage, « Actualiser » redemande l'écran à TRMNL, qui passe alors au suivant de la playlist avec les données déjà en cache.
 
-Avec une **clé de compte** en plus, « Actualiser » demande à TRMNL de recharger tout de suite les données de chaque plugin (`POST /api/plugin_settings/{id}/refreshes`), attend que l'écran soit recalculé, puis réaffiche le même écran (`GET /api/display/current`) sans avancer la playlist.
+Avec une **clé de compte** en plus, « Actualiser » demande à TRMNL de recharger tout de suite les widgets de l'écran affiché (`POST /api/plugin_settings/{id}/refreshes`) : les trois d'un écran combiné, lus dans sa composition (`GET /api/mashups/{id}`), ou le seul plugin d'un écran simple. La page attend que TRMNL ait fini de recalculer l'écran, qui l'est une fois par widget, puis réaffiche ce même écran sans avancer la playlist.
 
 1. Sur trmnl.com, dans les réglages du compte, crée une clé avec seulement les droits **Read** et **Content**. Si tu la limites, donne-lui accès à l'appareil et à ses plugins.
 2. Sur l'iPad, ouvre Réglages, puis « Actualisation forcée », et colle la clé.
