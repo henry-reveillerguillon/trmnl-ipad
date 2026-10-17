@@ -147,7 +147,12 @@
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
-  var state = { timer: null, barTimer: null, nextAt: 0, lastAt: 0, busy: false, wake: null };
+  // Une image plus vieille que ça vient d'avant la dernière mise à jour des données :
+  // TRMNL en prépare une nouvelle, on revient la chercher plus tôt.
+  var STALE_MS = 20 * 60 * 1000;
+  var CATCH_UP = 90;
+  var MAX_CATCH_UPS = 3;
+  var state = { timer: null, barTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, catchUps: 0, busy: false, wake: null };
 
   function $(id) { return document.getElementById(id); }
   function readCfg() {
@@ -201,7 +206,7 @@
     state.busy = true;
     var base = (cfg.base || DEFAULT_BASE).replace(/\/+$/, "");
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", base + "/api/display", true);
+    xhr.open("GET", base + "/api/display?t=" + Date.now(), true);
     xhr.setRequestHeader("Access-Token", cfg.key);
     xhr.timeout = 30000;
     xhr.onload = function () {
@@ -221,9 +226,19 @@
         state.busy = false;
         $("img").src = data.image_url;
         state.lastAt = Date.now();
+        // Le nom du fichier se termine par l'heure de calcul de l'image (secondes Unix).
+        var m = /-(\d{9,11})$/.exec(data.filename || "");
+        state.renderedAt = m ? parseInt(m[1], 10) * 1000 : 0;
         hideStatus();
         if (!$("setup").hidden) closeSetup();
-        schedule(data.refresh_rate);
+        var stale = state.renderedAt && state.lastAt - state.renderedAt > STALE_MS;
+        if (stale && state.catchUps < MAX_CATCH_UPS) {
+          state.catchUps += 1;
+          schedule(CATCH_UP);
+        } else {
+          if (!stale) state.catchUps = 0;
+          schedule(data.refresh_rate);
+        }
       };
       pre.onerror = function () { fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true); };
       pre.src = data.image_url;
@@ -262,7 +277,8 @@
   }
 
   function showBar() {
-    var info = state.lastAt ? "Mis à jour à " + hhmm(state.lastAt) : "En attente du premier écran";
+    var info = state.lastAt ? "Vérifié à " + hhmm(state.lastAt) : "En attente du premier écran";
+    if (state.renderedAt) info = "Écran de " + hhmm(state.renderedAt) + " · " + info.toLowerCase();
     if (state.nextAt) {
       var min = Math.max(0, Math.round((state.nextAt - Date.now()) / 60000));
       info += " · suivant dans " + (min < 1 ? "moins d'1 min" : min + " min");
