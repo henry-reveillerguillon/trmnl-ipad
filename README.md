@@ -12,7 +12,14 @@ La page interroge directement l'API des appareils TRMNL (`GET /api/display`), co
 4. Touche Partager, puis **Sur l'écran d'accueil**, et ouvre l'écran depuis cette icône pour l'avoir en plein écran.
 5. Dans les Réglages de l'iPad, mets le verrouillage automatique sur **Jamais** et laisse l'iPad branché.
 
-Touche l'écran pour voir l'heure de la dernière mise à jour, actualiser ou ouvrir les réglages.
+Touche l'écran pour voir l'heure de la dernière mise à jour, changer d'écran, actualiser ou ouvrir les réglages.
+
+## Changer d'écran
+
+Les boutons ◀ et ▶ de la barre, ou un glissement du doigt sur l'écran (vers la gauche : suivant, vers la droite : précédent), parcourent la playlist de l'appareil.
+
+- **Avec une clé de compte** (voir plus bas) : la page lit la playlist (`GET /api/playlists/items`) et affiche l'image déjà calculée de l'écran voulu (`GET /api/playlists/items/{id}/preview`). Rien n'est recalculé et la playlist de TRMNL ne bouge pas : la mise à jour automatique suivante reprend là où en est TRMNL. La clé doit avoir le droit **Read** et l'accès à l'appareil. Si le compte a plusieurs appareils, la page prend le premier.
+- **Sans clé de compte** : seul ▶ fonctionne. Il demande l'écran suivant comme le ferait le boîtier.
 
 ## Actualisation forcée (facultatif)
 
@@ -20,7 +27,7 @@ Sans autre réglage, « Actualiser » redemande l'écran à TRMNL, qui passe alo
 
 Avec une **clé de compte** en plus, « Actualiser » demande à TRMNL de recharger tout de suite les données de chaque plugin (`POST /api/plugin_settings/{id}/refreshes`), attend que l'écran soit recalculé, puis réaffiche le même écran (`GET /api/display/current`) sans avancer la playlist.
 
-1. Sur trmnl.com, dans les réglages du compte, crée une clé avec seulement les droits **Read** et **Content**, limitée si possible aux plugins affichés.
+1. Sur trmnl.com, dans les réglages du compte, crée une clé avec seulement les droits **Read** et **Content**. Si tu la limites, donne-lui accès à l'appareil et à ses plugins.
 2. Sur l'iPad, ouvre Réglages, puis « Actualisation forcée », et colle la clé.
 
 Chaque forçage compte dans le quota horaire de calculs d'écran du compte TRMNL : la page n'en autorise qu'un toutes les 2 min. La clé reste dans le navigateur de l'iPad, comme celle de l'appareil.

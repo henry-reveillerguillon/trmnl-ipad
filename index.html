@@ -39,6 +39,8 @@
   #status { position: fixed; left: 50%; bottom: 24px; bottom: calc(24px + env(safe-area-inset-bottom, 0px));
     -webkit-transform: translateX(-50%); transform: translateX(-50%); max-width: 80%;
     background: var(--ink); color: var(--paper); font-size: 15px; line-height: 1.35; padding: 8px 14px; border-radius: 8px; text-align: center; }
+  /* Barre ouverte : le message passe au-dessus d'elle. */
+  .bar-open #status { bottom: 96px; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
   #status.is-error { background: var(--danger); color: #ffffff; }
 
   #bar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(17, 17, 17, 0.92); color: #ffffff;
@@ -94,6 +96,8 @@
 
 <div id="bar" hidden>
   <div id="bar-info"></div>
+  <button type="button" id="btn-prev" class="ghost" aria-label="Écran précédent">&#x25C0;&#xFE0E;</button>
+  <button type="button" id="btn-next" class="ghost" aria-label="Écran suivant">&#x25B6;&#xFE0E;</button>
   <button type="button" id="btn-refresh">Actualiser</button>
   <button type="button" id="btn-settings" class="ghost">Réglages</button>
 </div>
@@ -126,7 +130,7 @@
       <div class="field">
         <label for="account">Clé de compte</label>
         <input id="account" name="account" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Colle la clé de compte ici">
-        <p class="hint">Avec cette clé, « Actualiser » fait recharger tout de suite les horaires et la météo, puis réaffiche le même écran. Sans elle, il passe à l'écran suivant. À créer sur trmnl.com dans les <a href="https://trmnl.com/account" target="_blank" rel="noopener">réglages du compte</a>, avec seulement les droits Read et Content.</p>
+        <p class="hint">Avec cette clé, « Actualiser » fait recharger tout de suite les horaires et la météo, puis réaffiche le même écran. Elle permet aussi de revenir à l'écran précédent de la playlist. Sans elle, « Actualiser » passe à l'écran suivant. À créer sur trmnl.com dans les <a href="https://trmnl.com/account" target="_blank" rel="noopener">réglages du compte</a>, avec seulement les droits Read et Content, et l'accès à l'appareil et à ses plugins.</p>
       </div>
     </details>
 
@@ -154,7 +158,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 4;
+  var VERSION = 5;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -170,7 +174,8 @@
   var FORCE_TRIES = 8;
   // Bus, trains, météo et calendrier, si la clé ne peut pas lister les plugins du compte.
   var FORCE_FALLBACK = [503473, 503477, 503609, 503500];
-  var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "", catchUps: 0, busy: false, wake: null };
+  var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "", catchUps: 0, busy: false, wake: null,
+    refreshRate: 300, itemId: null, blobUrl: null, touchX: null, touchY: 0 };
 
   function $(id) { return document.getElementById(id); }
   function readCfg() {
@@ -281,6 +286,12 @@
       state.renderedAt = r > 0 ? r : (m ? parseInt(m[1], 10) * 1000 : 0);
       var changed = data.image_url !== state.lastUrl;
       state.lastUrl = data.image_url;
+      if (data.refresh_rate) state.refreshRate = data.refresh_rate;
+      // Un écran choisi avec ◀ ▶ vient d'une image locale (blob) : on libère la précédente.
+      if (state.blobUrl && state.blobUrl !== data.image_url) { URL.revokeObjectURL(state.blobUrl); state.blobUrl = null; }
+      if (data.blob) state.blobUrl = data.image_url;
+      state.itemId = data.itemId || null;
+      state.itemLabel = data.itemLabel || "";
       hideStatus();
       if (!$("setup").hidden) closeSetup();
       done(changed);
@@ -435,6 +446,81 @@
     x.send();
   }
 
+  // ◀ ▶ : avec la clé de compte, on lit la playlist de l'appareil et l'image déjà calculée
+  // de l'écran voulu. Rien n'est recalculé et la playlist de TRMNL ne bouge pas : la
+  // mise à jour automatique suivante reprend là où en est TRMNL.
+  // Sans clé de compte, seul ▶ marche : il demande l'écran suivant comme le boîtier.
+  function navigate(dir) {
+    var cfg = readCfg();
+    if (state.busy) return;
+    if (!cfg.account) {
+      if (dir < 0) { flash("Pour revenir en arrière, ajoute une clé de compte dans les réglages."); return; }
+      showStatus("Écran suivant…", false);
+      fetchDisplay(true);
+      return;
+    }
+    clearTimeout(state.timer);
+    state.nextAt = 0;
+    state.busy = true;
+    showStatus(dir > 0 ? "Écran suivant…" : "Écran précédent…", false);
+    accountCall("GET", "/api/playlists/items", function (st, res) {
+      if (st !== 200 || !res || !res.data) return navFail(st);
+      // Un seul appareil sur le compte : on garde les éléments visibles du premier rencontré.
+      var items = [], dev = null, i;
+      for (i = 0; i < res.data.length; i++) {
+        var it = res.data[i];
+        if (!it.visible) continue;
+        if (dev === null) dev = it.device_id;
+        if (it.device_id === dev) items.push(it);
+      }
+      if (!items.length) return navFail(-1);
+      items.sort(function (a, b) { return a.row_order - b.row_order; });
+      var cur = -1;
+      for (i = 0; i < items.length; i++) {
+        var now = items[i].presentation && items[i].presentation.status && items[i].presentation.status.kind === "now";
+        if (state.itemId ? items[i].id === state.itemId : now) cur = i;
+      }
+      if (cur < 0) cur = dir > 0 ? -1 : 0;
+      var idx = (cur + dir + items.length) % items.length;
+      loadPreview(items[idx], idx, items.length);
+    });
+  }
+
+  function loadPreview(item, idx, count) {
+    var cfg = readCfg();
+    var x = new XMLHttpRequest();
+    x.open("GET", baseUrl(cfg) + "/api/playlists/items/" + item.id + "/preview?t=" + Date.now(), true);
+    x.setRequestHeader("Authorization", "Bearer " + cfg.account);
+    x.responseType = "blob";
+    x.timeout = 20000;
+    x.onload = function () {
+      if (x.status !== 200) return navFail(x.status);
+      var title = (item.presentation && item.presentation.title) || "Écran";
+      var label = title + " (" + (idx + 1) + "/" + count + ")";
+      showScreen({ image_url: URL.createObjectURL(x.response), blob: true, itemId: item.id, itemLabel: label,
+        rendered_at: item.rendered_at }, function () {
+        schedule(state.refreshRate);
+        flash(label);
+        if (!$("bar").hidden) showBar();
+      });
+    };
+    x.onerror = function () { navFail(0); };
+    x.ontimeout = x.onerror;
+    x.send();
+  }
+
+  function navFail(status) {
+    state.busy = false;
+    var msg = status === 401 || status === 403
+      ? "TRMNL refuse la clé de compte pour lire la playlist. Il lui faut le droit Read et l'accès à l'appareil."
+      : status === -1 ? "La playlist de l'appareil est vide."
+      : status === 0 ? "Pas de connexion à TRMNL."
+      : "TRMNL n'a pas renvoyé l'écran demandé (HTTP " + status + ").";
+    showStatus(msg, true);
+    state.statusTimer = setTimeout(hideStatus, 9000);
+    schedule(state.refreshRate);
+  }
+
   function keepAwake() {
     if (!navigator.wakeLock || document.visibilityState !== "visible") return;
     navigator.wakeLock.request("screen").then(function (lock) { state.wake = lock; })["catch"](function () {});
@@ -468,16 +554,18 @@
   function showBar() {
     var info = state.lastAt ? "Vérifié à " + hhmm(state.lastAt) : "En attente du premier écran";
     if (state.renderedAt) info = "Écran de " + hhmm(state.renderedAt) + " · " + info.toLowerCase();
+    if (state.itemLabel) info = state.itemLabel + " · " + info;
     if (state.nextAt) {
       var min = Math.max(0, Math.round((state.nextAt - Date.now()) / 60000));
       info += " · suivant dans " + (min < 1 ? "moins d'1 min" : min + " min");
     }
     $("bar-info").textContent = info;
     $("bar").hidden = false;
+    document.documentElement.className = "bar-open";
     clearTimeout(state.barTimer);
     state.barTimer = setTimeout(hideBar, 6000);
   }
-  function hideBar() { $("bar").hidden = true; clearTimeout(state.barTimer); }
+  function hideBar() { $("bar").hidden = true; document.documentElement.className = ""; clearTimeout(state.barTimer); }
 
   $("setup").addEventListener("submit", function (e) {
     e.preventDefault();
@@ -511,6 +599,21 @@
     fetchDisplay(true);
   });
   $("btn-settings").addEventListener("click", function () { openSetup(); });
+  $("btn-prev").addEventListener("click", function () { showBar(); navigate(-1); });
+  $("btn-next").addEventListener("click", function () { showBar(); navigate(1); });
+
+  // Glisser vers la gauche : écran suivant ; vers la droite : écran précédent.
+  $("screen").addEventListener("touchstart", function (e) {
+    if (e.touches.length !== 1) { state.touchX = null; return; }
+    state.touchX = e.touches[0].clientX;
+    state.touchY = e.touches[0].clientY;
+  });
+  $("screen").addEventListener("touchend", function (e) {
+    if (state.touchX === null) return;
+    var t = e.changedTouches[0], dx = t.clientX - state.touchX, dy = t.clientY - state.touchY;
+    state.touchX = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) { hideBar(); navigate(dx < 0 ? 1 : -1); }
+  });
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible") return;
