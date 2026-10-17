@@ -14,6 +14,17 @@ La page interroge directement l'API des appareils TRMNL (`GET /api/display`), co
 
 Touche l'écran pour voir l'heure de la dernière mise à jour, actualiser ou ouvrir les réglages.
 
+## Actualisation forcée (facultatif)
+
+Sans autre réglage, « Actualiser » redemande l'écran à TRMNL, qui passe alors au suivant de la playlist avec les données déjà en cache.
+
+Avec une **clé de compte** en plus, « Actualiser » demande à TRMNL de recharger tout de suite les données de chaque plugin (`POST /api/plugin_settings/{id}/refreshes`), attend que l'écran soit recalculé, puis réaffiche le même écran (`GET /api/display/current`) sans avancer la playlist.
+
+1. Sur trmnl.com, dans les réglages du compte, crée une clé avec seulement les droits **Read** et **Content**, limitée si possible aux plugins affichés.
+2. Sur l'iPad, ouvre Réglages, puis « Actualisation forcée », et colle la clé.
+
+Chaque forçage compte dans le quota horaire de calculs d'écran du compte TRMNL : la page n'en autorise qu'un toutes les 2 min. La clé reste dans le navigateur de l'iPad, comme celle de l'appareil.
+
 ## Bon à savoir
 
 - Chaque mise à jour compte comme une connexion de l'appareil et fait avancer sa playlist. Si un boîtier TRMNL tourne en même temps sur la même clé, les deux se partagent la playlist. Dans ce cas, utilise plutôt [TRMNL Mirror](https://trmnl.com/mirror), qui se contente de recopier l'écran du boîtier.

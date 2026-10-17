@@ -69,7 +69,7 @@
   input, select { display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 18px; color: var(--ink);
     background: var(--paper); border: 2px solid var(--line); border-radius: 8px; padding: 12px; -webkit-appearance: none; appearance: none; }
   input:focus, select:focus { border-color: var(--ink); outline: none; }
-  #key { -webkit-text-security: disc; font-family: ui-monospace, Menlo, monospace; }
+  #key, #account { -webkit-text-security: disc; font-family: ui-monospace, Menlo, monospace; }
   .hint { font-size: 14px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
   .hint a { color: var(--ink); }
   details { margin: 4px 0 24px; }
@@ -121,6 +121,15 @@
       </select>
     </div>
 
+    <details id="force">
+      <summary>Actualisation forcée (facultatif)</summary>
+      <div class="field">
+        <label for="account">Clé de compte</label>
+        <input id="account" name="account" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Colle la clé de compte ici">
+        <p class="hint">Avec cette clé, « Actualiser » fait recharger tout de suite les horaires et la météo, puis réaffiche le même écran. Sans elle, il passe à l'écran suivant. À créer sur trmnl.com dans les <a href="https://trmnl.com/account" target="_blank" rel="noopener">réglages du compte</a>, avec seulement les droits Read et Content.</p>
+      </div>
+    </details>
+
     <details id="adv">
       <summary>Serveur</summary>
       <div class="field">
@@ -145,7 +154,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 3;
+  var VERSION = 4;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -154,6 +163,13 @@
   var STALE_MS = 20 * 60 * 1000;
   var CATCH_UP = 90;
   var MAX_CATCH_UPS = 3;
+  // Forçage : chaque recalcul compte dans le quota horaire du compte TRMNL, d'où l'écart minimal.
+  var FORCE_GAP = 2 * 60 * 1000;
+  var FORCE_MAX = 8;
+  var FORCE_STEP = 5000;
+  var FORCE_TRIES = 8;
+  // Bus, trains, météo et calendrier, si la clé ne peut pas lister les plugins du compte.
+  var FORCE_FALLBACK = [503473, 503477, 503609, 503500];
   var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "", catchUps: 0, busy: false, wake: null };
 
   function $(id) { return document.getElementById(id); }
@@ -205,17 +221,31 @@
     if (retry) schedule(RETRY);
   }
 
-  // manual === true quand on touche « Actualiser » (setTimeout n'envoie pas ce booléen).
-  function fetchDisplay(manual) {
-    manual = manual === true;
-    clearTimeout(state.timer);
+  function baseUrl(cfg) { return (cfg.base || DEFAULT_BASE).replace(/\/+$/, ""); }
+
+  // Appel avec la clé de compte (forçage). done(status, data) ; status 0 = pas de réseau.
+  function accountCall(method, path, done) {
     var cfg = readCfg();
-    if (!cfg.key) { openSetup(); return; }
-    if (state.busy) return;
-    state.busy = true;
-    var base = (cfg.base || DEFAULT_BASE).replace(/\/+$/, "");
+    var x = new XMLHttpRequest();
+    x.open(method, baseUrl(cfg) + path, true);
+    x.setRequestHeader("Authorization", "Bearer " + cfg.account);
+    x.timeout = 20000;
+    x.onload = function () {
+      var data = null;
+      try { data = JSON.parse(x.responseText); } catch (e) {}
+      done(x.status, data);
+    };
+    x.onerror = function () { done(0, null); };
+    x.ontimeout = x.onerror;
+    x.send();
+  }
+
+  // Appel avec la clé de l'appareil. /api/display fait avancer la playlist,
+  // /api/display/current renvoie l'écran en cours sans la toucher.
+  function deviceCall(path, done) {
+    var cfg = readCfg();
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", base + "/api/display?t=" + Date.now(), true);
+    xhr.open("GET", baseUrl(cfg) + path + "?t=" + Date.now(), true);
     xhr.setRequestHeader("Access-Token", cfg.key);
     xhr.timeout = 30000;
     xhr.onload = function () {
@@ -230,18 +260,45 @@
       if (xhr.status !== 200 || !data.image_url) {
         return fail("TRMNL n'a pas renvoyé d'écran (" + (data.error || data.message || "HTTP " + xhr.status) + "). Nouvel essai dans 1 min.", true);
       }
-      var pre = new Image();
-      pre.onload = function () {
-        state.busy = false;
-        $("img").src = data.image_url;
-        state.lastAt = Date.now();
-        // Le nom du fichier se termine par l'heure de calcul de l'image (secondes Unix).
-        var m = /-(\d{9,11})$/.exec(data.filename || "");
-        state.renderedAt = m ? parseInt(m[1], 10) * 1000 : 0;
-        var changed = data.image_url !== state.lastUrl;
-        state.lastUrl = data.image_url;
-        hideStatus();
-        if (!$("setup").hidden) closeSetup();
+      done(data);
+    };
+    xhr.onerror = function () { fail("Pas de connexion à TRMNL. Nouvel essai dans 1 min.", true); };
+    xhr.ontimeout = xhr.onerror;
+    xhr.send();
+  }
+
+  // Charge l'image en arrière-plan puis l'affiche. done(changed).
+  function showScreen(data, done) {
+    var pre = new Image();
+    pre.onload = function () {
+      state.busy = false;
+      $("img").src = data.image_url;
+      state.lastAt = Date.now();
+      // /api/display/current donne rendered_at ; /api/display met l'heure de calcul
+      // (secondes Unix) à la fin du nom de fichier.
+      var r = data.rendered_at ? Date.parse(data.rendered_at) : NaN;
+      var m = /-(\d{9,11})$/.exec(data.filename || "");
+      state.renderedAt = r > 0 ? r : (m ? parseInt(m[1], 10) * 1000 : 0);
+      var changed = data.image_url !== state.lastUrl;
+      state.lastUrl = data.image_url;
+      hideStatus();
+      if (!$("setup").hidden) closeSetup();
+      done(changed);
+    };
+    pre.onerror = function () { fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true); };
+    pre.src = data.image_url;
+  }
+
+  // manual === true quand on touche « Actualiser » (setTimeout n'envoie pas ce booléen).
+  function fetchDisplay(manual) {
+    manual = manual === true;
+    clearTimeout(state.timer);
+    var cfg = readCfg();
+    if (!cfg.key) { openSetup(); return; }
+    if (state.busy) return;
+    state.busy = true;
+    deviceCall("/api/display", function (data) {
+      showScreen(data, function (changed) {
         // TRMNL renvoie toujours la dernière image déjà calculée et prépare la suivante
         // environ 1 min 30 après la connexion : on revient la chercher à ce moment-là.
         if (manual) {
@@ -263,13 +320,106 @@
           if (!stale) state.catchUps = 0;
           schedule(data.refresh_rate);
         }
-      };
-      pre.onerror = function () { fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true); };
-      pre.src = data.image_url;
-    };
-    xhr.onerror = function () { fail("Pas de connexion à TRMNL. Nouvel essai dans 1 min.", true); };
-    xhr.ontimeout = xhr.onerror;
-    xhr.send();
+      });
+    });
+  }
+
+  // « Actualiser » avec une clé de compte : TRMNL recharge les données de chaque plugin
+  // puis recalcule ses écrans. On réaffiche ensuite l'écran en cours, sans avancer la playlist.
+  function forceRefresh() {
+    var cfg = readCfg();
+    if (state.busy) return;
+    var wait = FORCE_GAP - (Date.now() - (cfg.forcedAt || 0));
+    if (wait > 0) {
+      var min = Math.ceil(wait / 60000);
+      flash("Données déjà rechargées il y a peu. Nouveau forçage possible dans " + min + " min.");
+      return;
+    }
+    clearTimeout(state.timer);
+    state.nextAt = 0;
+    state.busy = true;
+    cfg.forcedAt = Date.now();
+    writeCfg(cfg);
+    var started = Date.now();
+    showStatus("Rechargement des horaires et de la météo…", false);
+
+    accountCall("GET", "/api/plugin_settings", function (status, res) {
+      var ids = [];
+      if (status === 200 && res && res.data) {
+        for (var i = 0; i < res.data.length; i++) ids.push(res.data[i].id);
+      }
+      // Clé limitée à Content, ou liste illisible : on recharge les plugins de l'écran d'Orléans.
+      if (!ids.length) ids = FORCE_FALLBACK.slice();
+      ids = ids.slice(0, FORCE_MAX);
+
+      var pending = ids.length, jobs = [], ok = 0, refused = 0, quota = 0;
+      for (var j = 0; j < ids.length; j++) startOne(ids[j]);
+
+      function startOne(id) {
+        accountCall("POST", "/api/plugin_settings/" + id + "/refreshes", function (st, r) {
+          if (st === 202 || st === 200) {
+            ok += 1;
+            if (r && r.data && r.data.job_id) jobs.push({ id: id, job: r.data.job_id });
+          } else if (st === 429) {
+            quota += 1;
+          } else if (st === 401 || st === 403) {
+            refused += 1;
+          }
+          pending -= 1;
+          if (pending === 0) afterStart();
+        });
+      }
+
+      function afterStart() {
+        if (!ok) {
+          state.busy = false;
+          var msg = quota ? "TRMNL a atteint sa limite de calculs pour cette heure : forçage impossible pour l'instant."
+            : refused ? "TRMNL refuse la clé de compte. Vérifie-la dans les réglages de cette page."
+            : "Forçage impossible (pas de réponse de TRMNL).";
+          cfg.forcedAt = 0;
+          writeCfg(cfg);
+          showStatus(msg, true);
+          state.statusTimer = setTimeout(hideStatus, 9000);
+          schedule(RETRY);
+          return;
+        }
+        pollJobs(jobs, 0);
+      }
+    });
+
+    // Les plugins qui vont chercher une URL répondent un job : on attend qu'ils aient fini.
+    function pollJobs(jobs, round) {
+      if (!jobs.length || round >= 10) return waitScreen(0);
+      var left = jobs.length, still = [];
+      for (var k = 0; k < jobs.length; k++) (function (j) {
+        accountCall("GET", "/api/plugin_settings/" + j.id + "/refreshes/" + j.job, function (st) {
+          if (st === 202) still.push(j);
+          left -= 1;
+          if (left === 0) setTimeout(function () { pollJobs(still, round + 1); }, still.length ? 3000 : 0);
+        });
+      })(jobs[k]);
+    }
+
+    // Puis on attend que TRMNL ait recalculé l'image de l'écran en cours.
+    function waitScreen(tries) {
+      showStatus("Recalcul de l'écran…", false);
+      setTimeout(function () {
+        deviceCall("/api/display/current", function (data) {
+          var r = data.rendered_at ? Date.parse(data.rendered_at) : 0;
+          var fresh = r >= started - 5000;
+          if (!fresh && tries < FORCE_TRIES) return waitScreen(tries + 1);
+          showScreen(data, function () {
+            if (fresh) {
+              flash("Données rechargées. Écran recalculé à " + hhmm(r) + ".");
+              schedule(data.refresh_rate);
+            } else {
+              flash("Données rechargées. TRMNL n'a pas encore recalculé l'écran : il apparaîtra à la prochaine mise à jour.");
+              schedule(data.refresh_rate);
+            }
+          });
+        });
+      }, FORCE_STEP);
+    }
   }
 
   function checkUpdate() {
@@ -298,6 +448,8 @@
     $("key").value = cfg.key || "";
     $("mode").value = cfg.mode || "light";
     $("base").value = cfg.base || "";
+    $("account").value = cfg.account || "";
+    $("force").open = !!cfg.account;
     $("adv").open = !!cfg.base;
     $("btn-cancel").hidden = !cfg.key;
     $("btn-forget").hidden = !cfg.key;
@@ -332,7 +484,8 @@
     var key = $("key").value.replace(/\s+/g, "");
     if (!key) { $("form-error").textContent = "Colle d'abord la clé de l'appareil."; $("form-error").hidden = false; return; }
     var base = $("base").value.replace(/\s+/g, "");
-    var cfg = { key: key, mode: $("mode").value, base: base && base !== DEFAULT_BASE ? base : "" };
+    var cfg = { key: key, mode: $("mode").value, base: base && base !== DEFAULT_BASE ? base : "",
+      account: $("account").value.replace(/\s+/g, ""), forcedAt: readCfg().forcedAt || 0 };
     if (!writeCfg(cfg)) {
       $("form-error").textContent = "Safari refuse d'enregistrer la clé. Quitte la navigation privée puis réessaie.";
       $("form-error").hidden = false;
@@ -351,7 +504,12 @@
     openSetup();
   });
   $("screen").addEventListener("click", function () { if ($("bar").hidden) showBar(); else hideBar(); });
-  $("btn-refresh").addEventListener("click", function () { hideBar(); showStatus("Actualisation…", false); fetchDisplay(true); });
+  $("btn-refresh").addEventListener("click", function () {
+    hideBar();
+    if (readCfg().account) { forceRefresh(); return; }
+    showStatus("Actualisation…", false);
+    fetchDisplay(true);
+  });
   $("btn-settings").addEventListener("click", function () { openSetup(); });
 
   document.addEventListener("visibilitychange", function () {
