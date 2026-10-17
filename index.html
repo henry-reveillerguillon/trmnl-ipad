@@ -162,7 +162,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 6;
+  var VERSION = 7;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -415,9 +415,29 @@
       })(jobs[k]);
     }
 
-    // Puis on attend que TRMNL ait recalculé l'image de l'écran en cours.
+    // Puis on attend que TRMNL ait recalculé l'écran affiché sur l'iPad (celui choisi
+    // avec ◀ ▶, sinon celui où en est TRMNL) et on réaffiche ce même écran.
+    var targetId = state.itemId;
     function waitScreen(tries) {
       showStatus("Recalcul de l'écran…", false);
+      setTimeout(function () {
+        accountCall("GET", "/api/playlists/items", function (st, res) {
+          var items = st === 200 && res && res.data ? playlistItems(res.data) : [];
+          var idx = findItem(items, targetId);
+          // Playlist illisible (clé sans accès à l'appareil) : écran en cours selon TRMNL.
+          if (idx < 0) return waitCurrent(tries);
+          targetId = items[idx].id;
+          var r = Date.parse(items[idx].rendered_at) || 0;
+          var fresh = r >= started - 5000;
+          if (!fresh && tries < FORCE_TRIES) return waitScreen(tries + 1);
+          loadPreview(items[idx], idx, items.length, fresh
+            ? "Données rechargées. Écran recalculé à " + hhmm(r) + "."
+            : "Données rechargées. TRMNL n'a pas encore recalculé cet écran : il apparaîtra à la prochaine mise à jour.");
+        });
+      }, FORCE_STEP);
+    }
+
+    function waitCurrent(tries) {
       setTimeout(function () {
         deviceCall("/api/display/current", function (data) {
           var r = data.rendered_at ? Date.parse(data.rendered_at) : 0;
@@ -433,8 +453,31 @@
             }
           });
         });
-      }, FORCE_STEP);
+      }, 0);
     }
+  }
+
+  // Éléments visibles de la playlist, dans l'ordre. Un seul appareil sur le compte :
+  // on garde ceux du premier rencontré.
+  function playlistItems(data) {
+    var items = [], dev = null;
+    for (var i = 0; i < data.length; i++) {
+      var it = data[i];
+      if (!it.visible) continue;
+      if (dev === null) dev = it.device_id;
+      if (it.device_id === dev) items.push(it);
+    }
+    items.sort(function (a, b) { return a.row_order - b.row_order; });
+    return items;
+  }
+
+  // Position de l'élément id, ou à défaut de celui que TRMNL affiche ; -1 si aucun.
+  function findItem(items, id) {
+    for (var i = 0; i < items.length; i++) {
+      var now = items[i].presentation && items[i].presentation.status && items[i].presentation.status.kind === "now";
+      if (id ? items[i].id === id : now) return i;
+    }
+    return -1;
   }
 
   function checkUpdate() {
@@ -469,28 +512,16 @@
     showStatus(dir > 0 ? "Écran suivant…" : "Écran précédent…", false);
     accountCall("GET", "/api/playlists/items", function (st, res) {
       if (st !== 200 || !res || !res.data) return navFail(st);
-      // Un seul appareil sur le compte : on garde les éléments visibles du premier rencontré.
-      var items = [], dev = null, i;
-      for (i = 0; i < res.data.length; i++) {
-        var it = res.data[i];
-        if (!it.visible) continue;
-        if (dev === null) dev = it.device_id;
-        if (it.device_id === dev) items.push(it);
-      }
+      var items = playlistItems(res.data);
       if (!items.length) return navFail(-1);
-      items.sort(function (a, b) { return a.row_order - b.row_order; });
-      var cur = -1;
-      for (i = 0; i < items.length; i++) {
-        var now = items[i].presentation && items[i].presentation.status && items[i].presentation.status.kind === "now";
-        if (state.itemId ? items[i].id === state.itemId : now) cur = i;
-      }
+      var cur = findItem(items, state.itemId);
       if (cur < 0) cur = dir > 0 ? -1 : 0;
       var idx = (cur + dir + items.length) % items.length;
       loadPreview(items[idx], idx, items.length);
     });
   }
 
-  function loadPreview(item, idx, count) {
+  function loadPreview(item, idx, count, message) {
     var cfg = readCfg();
     var x = new XMLHttpRequest();
     x.open("GET", baseUrl(cfg) + "/api/playlists/items/" + item.id + "/preview?t=" + Date.now(), true);
@@ -504,7 +535,7 @@
       showScreen({ image_url: URL.createObjectURL(x.response), blob: true, itemId: item.id, itemLabel: label,
         rendered_at: item.rendered_at }, function () {
         schedule(state.refreshRate);
-        flash(label);
+        flash(message || label);
         if (!$("bar").hidden) showBar();
       });
     };
