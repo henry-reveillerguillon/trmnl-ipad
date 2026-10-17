@@ -14,23 +14,15 @@ La page interroge directement l'API des appareils TRMNL (`GET /api/display`), co
 
 Touche l'écran pour voir l'heure de la dernière mise à jour, changer d'écran, actualiser ou ouvrir les réglages.
 
-## Changer d'écran
+## Boutons
 
-Les boutons ◀ et ▶ de la barre, ou un glissement du doigt sur l'écran (vers la gauche : suivant, vers la droite : précédent), parcourent la playlist de l'appareil.
+Touche l'écran pour afficher la barre :
 
-- **Avec une clé de compte** (voir plus bas) : la page lit la playlist (`GET /api/playlists/items`) et affiche l'image déjà calculée de l'écran voulu (`GET /api/playlists/items/{id}/preview`). Rien n'est recalculé et la playlist de TRMNL ne bouge pas : la mise à jour automatique suivante reprend là où en est TRMNL. La clé doit avoir le droit **Read** et l'accès à l'appareil. Si le compte a plusieurs appareils, la page prend le premier.
-- **Sans clé de compte** : seul ▶ fonctionne. Il demande l'écran suivant comme le ferait le boîtier.
+- **Actualiser** : TRMNL recharge les données de l'écran affiché (tous les widgets d'un écran combiné), le recalcule et le renvoie environ 30 secondes plus tard. L'écran reste le même. C'est la fonction spéciale « Refresh » du boîtier (`Special-Function: refresh`).
+- **◀** : écran précédent (fonction « Rewind », `Special-Function: rewind`).
+- **▶** : écran suivant.
 
-## Actualisation forcée (facultatif)
-
-Sans autre réglage, « Actualiser » redemande l'écran à TRMNL, qui passe alors au suivant de la playlist avec les données déjà en cache.
-
-Avec une **clé de compte** en plus, « Actualiser » demande à TRMNL de recharger tout de suite les widgets de l'écran affiché (`POST /api/plugin_settings/{id}/refreshes`) : les trois d'un écran combiné, lus dans sa composition (`GET /api/mashups/{id}`), ou le seul plugin d'un écran simple. La page attend que TRMNL ait fini de recalculer l'écran, qui l'est une fois par widget, puis réaffiche ce même écran sans avancer la playlist.
-
-1. Sur trmnl.com, dans les réglages du compte, crée une clé avec seulement les droits **Read** et **Content**. Si tu la limites, donne-lui accès à l'appareil et à ses plugins.
-2. Sur l'iPad, ouvre Réglages, puis « Actualisation forcée », et colle la clé.
-
-Chaque forçage compte dans le quota horaire de calculs d'écran du compte TRMNL : la page n'en autorise qu'un toutes les 2 min. La clé reste dans le navigateur de l'iPad, comme celle de l'appareil.
+Glisser le doigt vers la gauche ou la droite fait la même chose que ▶ et ◀. Seule la clé de l'appareil est nécessaire. La page se présente avec le firmware 1.5.9, le minimum requis par ces fonctions.
 
 ## Bon à savoir
 
