@@ -144,6 +144,8 @@
 
 <script>
 (function () {
+  // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
+  var VERSION = 3;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -152,7 +154,7 @@
   var STALE_MS = 20 * 60 * 1000;
   var CATCH_UP = 90;
   var MAX_CATCH_UPS = 3;
-  var state = { timer: null, barTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, catchUps: 0, busy: false, wake: null };
+  var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "", catchUps: 0, busy: false, wake: null };
 
   function $(id) { return document.getElementById(id); }
   function readCfg() {
@@ -172,11 +174,16 @@
 
   function showStatus(msg, isError) {
     var el = $("status");
+    clearTimeout(state.statusTimer);
     el.textContent = msg;
     el.className = isError ? "is-error" : "";
     el.hidden = false;
   }
   function hideStatus() { $("status").hidden = true; }
+  function flash(msg) {
+    showStatus(msg, false);
+    state.statusTimer = setTimeout(hideStatus, 7000);
+  }
 
   function schedule(seconds) {
     clearTimeout(state.timer);
@@ -198,7 +205,9 @@
     if (retry) schedule(RETRY);
   }
 
-  function fetchDisplay() {
+  // manual === true quand on touche « Actualiser » (setTimeout n'envoie pas ce booléen).
+  function fetchDisplay(manual) {
+    manual = manual === true;
     clearTimeout(state.timer);
     var cfg = readCfg();
     if (!cfg.key) { openSetup(); return; }
@@ -229,8 +238,23 @@
         // Le nom du fichier se termine par l'heure de calcul de l'image (secondes Unix).
         var m = /-(\d{9,11})$/.exec(data.filename || "");
         state.renderedAt = m ? parseInt(m[1], 10) * 1000 : 0;
+        var changed = data.image_url !== state.lastUrl;
+        state.lastUrl = data.image_url;
         hideStatus();
         if (!$("setup").hidden) closeSetup();
+        // TRMNL renvoie toujours la dernière image déjà calculée et prépare la suivante
+        // environ 1 min 30 après la connexion : on revient la chercher à ce moment-là.
+        if (manual) {
+          var when = state.renderedAt ? " (calculé à " + hhmm(state.renderedAt) + ")" : "";
+          if (changed) {
+            flash("Nouvel écran reçu" + when + ".");
+            schedule(data.refresh_rate);
+          } else {
+            flash("Écran déjà à jour" + when + ". TRMNL en prépare un nouveau : la page revient le chercher dans 1 min 30.");
+            schedule(CATCH_UP);
+          }
+          return;
+        }
         var stale = state.renderedAt && state.lastAt - state.renderedAt > STALE_MS;
         if (stale && state.catchUps < MAX_CATCH_UPS) {
           state.catchUps += 1;
@@ -246,6 +270,19 @@
     xhr.onerror = function () { fail("Pas de connexion à TRMNL. Nouvel essai dans 1 min.", true); };
     xhr.ontimeout = xhr.onerror;
     xhr.send();
+  }
+
+  function checkUpdate() {
+    var x = new XMLHttpRequest();
+    x.open("GET", "version.json?t=" + Date.now(), true);
+    x.onload = function () {
+      var v;
+      try { v = JSON.parse(x.responseText).version; } catch (e) { return; }
+      if (v && v !== VERSION && $("setup").hidden) {
+        window.location.replace(window.location.pathname + "?v=" + v);
+      }
+    };
+    x.send();
   }
 
   function keepAwake() {
@@ -314,18 +351,20 @@
     openSetup();
   });
   $("screen").addEventListener("click", function () { if ($("bar").hidden) showBar(); else hideBar(); });
-  $("btn-refresh").addEventListener("click", function () { hideBar(); showStatus("Actualisation…", false); fetchDisplay(); });
+  $("btn-refresh").addEventListener("click", function () { hideBar(); showStatus("Actualisation…", false); fetchDisplay(true); });
   $("btn-settings").addEventListener("click", function () { openSetup(); });
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible") return;
     keepAwake();
+    checkUpdate();
     if ($("setup").hidden && state.nextAt && Date.now() >= state.nextAt) fetchDisplay();
   });
   // Les minuteries peuvent dormir quand l'iPad se met en veille : on rattrape le retard.
   setInterval(function () {
     if ($("setup").hidden && state.nextAt && Date.now() > state.nextAt + 15000) fetchDisplay();
   }, 30000);
+  setInterval(checkUpdate, 30 * 60 * 1000);
 
   if (readCfg().key) {
     closeSetup();
