@@ -149,7 +149,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 12;
+  var VERSION = 13;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -241,21 +241,40 @@
     xhr.send();
   }
 
-  // TRMNL confirme une fonction spéciale dans « action » (ou « special_function »).
-  function acknowledged(data, special) {
-    return data.action === special || data.special_function === special;
+  // Écran d'attente de TRMNL (« refreshing ») : TRMNL le renvoie pendant qu'il recalcule un
+  // écran, après Actualiser ou quand l'écran est trop ancien (au réveil, par exemple).
+  function isWaitScreen(data) {
+    return /system_screens\/refresh|refreshing/i.test((data.image_url || "") + " " + (data.filename || ""));
+  }
+
+  // Tant que TRMNL renvoie l'écran d'attente, on patiente puis on redemande l'écran, comme le
+  // fait le boîtier. done(data) reçoit le vrai écran (ou le dernier reçu après 6 essais).
+  function untilReady(data, done, tries) {
+    tries = tries || 0;
+    if (!isWaitScreen(data) || tries >= 6) return done(data);
+    var s = parseInt(data.refresh_rate, 10);
+    if (!(s > 0)) s = 5;
+    s = Math.max(3, Math.min(30, s));
+    showStatus("TRMNL recalcule l'écran…", false);
+    setTimeout(function () {
+      deviceCall(null, function (next) { untilReady(next, done, tries + 1); });
+    }, s * 1000);
   }
 
   // Charge l'image en arrière-plan puis l'affiche. done(changed).
   function showScreen(data, done) {
+    // Paramètre anti-cache : Safari ne doit pas réafficher une ancienne image gardée en mémoire.
+    var url = data.image_url;
+    if (url.indexOf("?") < 0 && url.indexOf("blob:") !== 0) url += "?v=" + Date.now();
     var pre = new Image();
     pre.onload = function () {
       state.busy = false;
-      $("img").src = data.image_url;
+      $("img").src = url;
       state.lastAt = Date.now();
       // Le nom du fichier se termine par l'heure de calcul de l'image (secondes Unix).
       var m = /-(\d{9,11})$/.exec(data.filename || "");
-      state.renderedAt = m ? parseInt(m[1], 10) * 1000 : 0;
+      var r = data.rendered_at ? Date.parse(data.rendered_at) : NaN;
+      state.renderedAt = r > 0 ? r : (m ? parseInt(m[1], 10) * 1000 : 0);
       var changed = data.image_url !== state.lastUrl;
       state.lastUrl = data.image_url;
       hideStatus();
@@ -263,7 +282,7 @@
       done(changed);
     };
     pre.onerror = function () { fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true); };
-    pre.src = data.image_url;
+    pre.src = url;
   }
 
   // Mise à jour automatique, et ▶ (manual === true ; setTimeout n'envoie pas ce booléen).
@@ -273,19 +292,21 @@
     if (!readCfg().key) { openSetup(); return; }
     if (state.busy) return;
     state.busy = true;
-    deviceCall(null, function (data) {
-      showScreen(data, function () {
-        if (manual) { schedule(data.refresh_rate); return; }
-        // TRMNL renvoie la dernière image déjà calculée et prépare la suivante environ
-        // 1 min 30 après la connexion : si elle est ancienne, on revient la chercher.
-        var stale = state.renderedAt && state.lastAt - state.renderedAt > STALE_MS;
-        if (stale && state.catchUps < MAX_CATCH_UPS) {
-          state.catchUps += 1;
-          schedule(CATCH_UP);
-        } else {
-          if (!stale) state.catchUps = 0;
-          schedule(data.refresh_rate);
-        }
+    deviceCall(null, function (first) {
+      untilReady(first, function (data) {
+        showScreen(data, function () {
+          if (manual) { schedule(data.refresh_rate); return; }
+          // TRMNL renvoie la dernière image déjà calculée et prépare la suivante environ
+          // 1 min 30 après la connexion : si elle est ancienne, on revient la chercher.
+          var stale = state.renderedAt && state.lastAt - state.renderedAt > STALE_MS;
+          if (stale && state.catchUps < MAX_CATCH_UPS) {
+            state.catchUps += 1;
+            schedule(CATCH_UP);
+          } else {
+            if (!stale) state.catchUps = 0;
+            schedule(data.refresh_rate);
+          }
+        });
       });
     });
   }
@@ -314,9 +335,10 @@
   // 1. On s'assure que l'iPad montre l'écran que TRMNL considère comme en cours :
   //    c'est celui-là que TRMNL va recalculer.
   // 2. Special-Function: refresh : TRMNL recharge les données de cet écran (tous les widgets
-  //    d'un écran combiné), le recalcule et répond par un écran d'attente.
-  // 3. Quelques secondes plus tard, la connexion suivante renvoie l'écran recalculé.
-  //    On n'affiche jamais l'écran d'attente et on ne revient jamais en arrière.
+  //    d'un écran combiné) et le recalcule. Il répond par un écran d'attente, ou par l'image
+  //    actuelle s'il a déjà fait patienter plusieurs fois de suite.
+  // 3. On redemande l'écran jusqu'à recevoir le recalculé. Jamais d'écran d'attente affiché,
+  //    jamais de retour en arrière.
   function refreshScreen() {
     if (!readCfg().key) { openSetup(); return; }
     if (state.busy) return;
@@ -327,39 +349,33 @@
     showStatus("Actualisation : rechargement des données…", false);
     currentCall(function (cur) {
       var go = function () {
-        deviceCall("refresh", function (wait) {
-          var s = parseInt(wait.refresh_rate, 10);
-          if (!(s > 0)) s = 5;
-          s = Math.max(5, Math.min(45, s));
-          showStatus("Actualisation : TRMNL recalcule l'écran…", false);
-          fetchResult(wait.image_url, s, 0);
+        deviceCall("refresh", function (resp) {
+          var finish = function (data) {
+            showScreen(data, function () {
+              var r = state.renderedAt;
+              if (r && r !== before) {
+                flash("Écran actualisé : calculé à " + hhmm(r) + ".");
+              } else {
+                flash("TRMNL n'a pas encore recalculé l'écran (pas de calcul pendant sa veille de nuit, ni juste après plusieurs appuis). Il sera à jour au prochain cycle.");
+              }
+              schedule(data.refresh_rate);
+            });
+          };
+          if (isWaitScreen(resp)) return untilReady(resp, finish);
+          // Pas d'écran d'attente : on laisse quelques secondes au calcul puis on redemande.
+          showStatus("TRMNL recalcule l'écran…", false);
+          setTimeout(function () {
+            deviceCall(null, function (next) { untilReady(next, finish); });
+          }, 5000);
         });
       };
-      if (cur.image_url !== state.lastUrl) {
+      if (cur.image_url !== state.lastUrl && !isWaitScreen(cur)) {
         // L'iPad n'était pas sur l'écran en cours chez TRMNL : on l'affiche d'abord.
         showScreen(cur, function () { state.busy = true; before = state.renderedAt; go(); });
       } else {
         go();
       }
     });
-
-    function fetchResult(waitUrl, seconds, tries) {
-      setTimeout(function () {
-        deviceCall(null, function (fresh) {
-          // Encore l'écran d'attente : le calcul n'est pas fini, on patiente un peu.
-          if (fresh.image_url === waitUrl && tries < 3) return fetchResult(waitUrl, 5, tries + 1);
-          showScreen(fresh, function () {
-            var r = state.renderedAt;
-            if (r && r !== before) {
-              flash("Écran actualisé : calculé à " + hhmm(r) + ".");
-            } else {
-              flash("TRMNL n'a pas recalculé l'écran (il ne le fait pas pendant sa veille de nuit). Image du dernier calcul" + (r ? ", " + hhmm(r) : "") + ".");
-            }
-            schedule(fresh.refresh_rate);
-          });
-        });
-      }, seconds * 1000);
-    }
   }
 
   // ◀ : écran précédent, comme la fonction Rewind du boîtier.
@@ -369,10 +385,9 @@
     clearTimeout(state.timer);
     state.busy = true;
     showStatus("Écran précédent…", false);
-    deviceCall("rewind", function (data) {
-      showScreen(data, function () {
-        if (!acknowledged(data, "rewind")) flash("TRMNL n'a pas pu revenir en arrière : voici l'écran suivant.", true);
-        schedule(data.refresh_rate);
+    deviceCall("rewind", function (first) {
+      untilReady(first, function (data) {
+        showScreen(data, function () { schedule(data.refresh_rate); });
       });
     });
   }
