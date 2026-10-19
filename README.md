@@ -26,6 +26,7 @@ Glisser le doigt vers la gauche ou la droite fait la même chose que ▶ et ◀.
 
 ## Bon à savoir
 
+- **Veille** : pendant la veille de l'appareil (réglée sur trmnl.com), TRMNL envoie son image de veille, claire et orientée pour le modèle d'écran. La page affiche à la place un écran noir, avec l'heure de reprise en petit, déplacée à chaque vérification. Toucher l'écran affiche toujours la barre.
 - Chaque mise à jour compte comme une connexion de l'appareil et fait avancer sa playlist. Si un boîtier TRMNL tourne en même temps sur la même clé, les deux se partagent la playlist. Dans ce cas, utilise plutôt [TRMNL Mirror](https://trmnl.com/mirror), qui se contente de recopier l'écran du boîtier.
 - La page fonctionne aussi avec un serveur TRMNL auto-hébergé : renseigne son adresse dans « Serveur ».
 - Compatible avec les anciens iPad (le code n'utilise que du JavaScript ES5).

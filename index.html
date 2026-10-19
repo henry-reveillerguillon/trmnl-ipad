@@ -35,6 +35,10 @@
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .mode-dark #img { -webkit-filter: invert(1); filter: invert(1); }
   .mode-night #img { -webkit-filter: invert(1) brightness(0.55); filter: invert(1) brightness(0.55); }
+  /* Veille de l'appareil : écran noir (moins de consommation sur un iPad à écran OLED),
+     avec un texte discret qui change de place à chaque vérification. */
+  #sleep { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: #000000; }
+  #sleep-txt { position: absolute; color: #3a3a3a; font-size: 15px; line-height: 1.4; white-space: nowrap; }
 
   #status { position: fixed; left: 50%; bottom: 24px; bottom: calc(24px + env(safe-area-inset-bottom, 0px));
     -webkit-transform: translateX(-50%); transform: translateX(-50%); max-width: 80%;
@@ -91,6 +95,7 @@
 
 <div id="screen" hidden>
   <img id="img" alt="Écran TRMNL">
+  <div id="sleep" hidden><div id="sleep-txt"></div></div>
 </div>
 <div id="status" hidden></div>
 
@@ -149,7 +154,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 13;
+  var VERSION = 14;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -162,7 +167,7 @@
   // la page se présente comme tel.
   var FW_VERSION = "1.5.9";
   var state = { timer: null, barTimer: null, statusTimer: null, nextAt: 0, lastAt: 0, renderedAt: 0, lastUrl: "",
-    catchUps: 0, busy: false, wake: null, touchX: null, touchY: 0 };
+    catchUps: 0, busy: false, wake: null, touchX: null, touchY: 0, sleeping: false, wakeAt: 0 };
 
   function $(id) { return document.getElementById(id); }
   function readCfg() {
@@ -261,8 +266,38 @@
     }, s * 1000);
   }
 
+  // Pendant la veille de l'appareil, TRMNL renvoie son image système de veille (fond clair,
+  // orientée pour le modèle d'écran) avec un délai qui court jusqu'au réveil.
+  function isSleepScreen(data) {
+    var where = (data.image_url || "") + " " + (data.filename || "");
+    var s = parseInt(data.refresh_rate, 10);
+    return /sleep/i.test(where) || (/system_screens/i.test(where) && !isWaitScreen(data) && s > 3600);
+  }
+
+  // Écran noir à la place de l'image de veille.
+  function showSleep(data) {
+    var s = parseInt(data.refresh_rate, 10);
+    state.sleeping = true;
+    state.wakeAt = s > 0 ? Date.now() + s * 1000 : 0;
+    state.lastAt = Date.now();
+    state.renderedAt = 0;
+    var txt = $("sleep-txt");
+    txt.textContent = state.wakeAt ? "En veille · reprise vers " + hhmm(state.wakeAt) : "En veille";
+    txt.style.left = (8 + Math.floor(Math.random() * 60)) + "%";
+    txt.style.top = (10 + Math.floor(Math.random() * 75)) + "%";
+    txt.style.marginLeft = "-" + Math.round(txt.offsetWidth / 2) + "px";
+    $("sleep").hidden = false;
+  }
+
   // Charge l'image en arrière-plan puis l'affiche. done(changed).
   function showScreen(data, done) {
+    if (isSleepScreen(data)) {
+      state.busy = false;
+      hideStatus();
+      if (!$("setup").hidden) closeSetup();
+      showSleep(data);
+      return done(false);
+    }
     // Paramètre anti-cache : Safari ne doit pas réafficher une ancienne image gardée en mémoire.
     var url = data.image_url;
     if (url.indexOf("?") < 0 && url.indexOf("blob:") !== 0) url += "?v=" + Date.now();
@@ -270,6 +305,8 @@
     pre.onload = function () {
       state.busy = false;
       $("img").src = url;
+      $("sleep").hidden = true;
+      state.sleeping = false;
       state.lastAt = Date.now();
       // Le nom du fichier se termine par l'heure de calcul de l'image (secondes Unix).
       var m = /-(\d{9,11})$/.exec(data.filename || "");
@@ -441,6 +478,7 @@
   function showBar() {
     var info = state.lastAt ? "Vérifié à " + hhmm(state.lastAt) : "En attente du premier écran";
     if (state.renderedAt) info = "Écran de " + hhmm(state.renderedAt) + " · " + info.toLowerCase();
+    if (state.sleeping) info = "Appareil en veille" + (state.wakeAt ? " jusqu'à " + hhmm(state.wakeAt) : "") + " · " + info.toLowerCase();
     if (state.nextAt) {
       var min = Math.max(0, Math.round((state.nextAt - Date.now()) / 60000));
       info += " · suivant dans " + (min < 1 ? "moins d'1 min" : min + " min");
