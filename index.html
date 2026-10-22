@@ -158,7 +158,7 @@
 <script>
 (function () {
   // À augmenter avec version.json à chaque publication : les iPad déjà installés se rechargent seuls.
-  var VERSION = 15;
+  var VERSION = 16;
   var STORE = "trmnl-ipad";
   var DEFAULT_BASE = "https://trmnl.com";
   var RETRY = 60;
@@ -293,26 +293,16 @@
     $("sleep").hidden = false;
   }
 
-  // Mesure la luminosité moyenne de l'image (copie réduite dans un canvas) : sombre si < 100/255.
-  // Les serveurs d'images TRMNL autorisent la lecture (CORS) ; en cas d'échec, l'image est traitée comme claire.
-  function isDarkImage(url, cb) {
-    var called = false;
-    function finish(v) { if (!called) { called = true; cb(v); } }
-    setTimeout(function () { finish(false); }, 4000);
-    var probe = new Image();
-    probe.crossOrigin = "anonymous";
-    probe.onload = function () {
-      try {
-        var c = document.createElement("canvas"); c.width = 40; c.height = 30;
-        var ctx = c.getContext("2d"); ctx.drawImage(probe, 0, 0, 40, 30);
-        var d = ctx.getImageData(0, 0, 40, 30).data, sum = 0, i;
-        for (i = 0; i < d.length; i += 4) sum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
-        finish(sum / (d.length / 4) < 100);
-      } catch (e) { finish(false); }
-    };
-    probe.onerror = function () { finish(false); };
-    // Adresse distincte : le cache de Safari ne doit pas resservir la copie chargée sans CORS.
-    probe.src = url.indexOf("blob:") === 0 ? url : url + (url.indexOf("?") < 0 ? "?" : "&") + "probe=1";
+  // Luminosité moyenne d'une image déjà chargée (copie réduite dans un canvas) : sombre si < 100/255.
+  // Lecture possible seulement si l'image a été chargée avec CORS ; sinon elle est traitée comme claire.
+  function isDarkImage(img) {
+    try {
+      var c = document.createElement("canvas"); c.width = 40; c.height = 30;
+      var ctx = c.getContext("2d"); ctx.drawImage(img, 0, 0, 40, 30);
+      var d = ctx.getImageData(0, 0, 40, 30).data, sum = 0, i;
+      for (i = 0; i < d.length; i += 4) sum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+      return sum / (d.length / 4) < 100;
+    } catch (e) { return false; }
   }
 
   // Charge l'image en arrière-plan puis l'affiche. done(changed).
@@ -327,12 +317,18 @@
     // Paramètre anti-cache : Safari ne doit pas réafficher une ancienne image gardée en mémoire.
     var url = data.image_url;
     if (url.indexOf("?") < 0 && url.indexOf("blob:") !== 0) url += "?v=" + Date.now();
+    // Chargée avec CORS (sans changer l'adresse, souvent signée) pour pouvoir mesurer si l'écran est déjà sombre.
+    // Si le serveur refuse, nouvel essai sans CORS : l'écran s'affiche, simplement inversé en mode sombre.
+    var cors = true;
     var pre = new Image();
-    pre.onload = function () { isDarkImage(url, function (dark) { reveal(dark); }); };
+    pre.crossOrigin = "anonymous";
+    pre.onload = function () { reveal(cors && isDarkImage(pre)); };
     function reveal(dark) {
       state.busy = false;
-      $("img").className = dark ? "is-dark" : "";
-      $("img").src = url;
+      var img = $("img");
+      if (cors) img.crossOrigin = "anonymous"; else img.removeAttribute("crossorigin");
+      img.className = dark ? "is-dark" : "";
+      img.src = url;
       $("sleep").hidden = true;
       state.sleeping = false;
       state.lastAt = Date.now();
@@ -346,7 +342,10 @@
       if (!$("setup").hidden) closeSetup();
       done(changed);
     }
-    pre.onerror = function () { fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true); };
+    pre.onerror = function () {
+      if (cors) { cors = false; pre = new Image(); pre.onload = function () { reveal(false); }; pre.onerror = this.onerror; pre.src = url; return; }
+      fail("Image de l'écran indisponible. Nouvel essai dans 1 min.", true);
+    };
     pre.src = url;
   }
 
